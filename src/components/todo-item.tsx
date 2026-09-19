@@ -52,7 +52,7 @@ export function TodoItem({ todo, pending, overdue, onComplete, onEdit, onCancel,
     </button>
     <div ref={menuRoot} className="relative shrink-0">
       <button type="button" disabled={pending} onClick={() => { setMenu((value) => !value); setConfirmDelete(false); }} className="rounded-lg p-1 text-ink-500 hover:bg-black/5" aria-label={`Thao tác với ${todo.title}`} aria-haspopup="menu" aria-expanded={menu}>{pending ? <LoaderCircle className="animate-spin" size={16} /> : <Ellipsis size={18} />}</button>
-      {menu && <div role="menu" className="absolute right-0 top-8 z-20 w-44 rounded-xl border border-sage-200 bg-white p-1.5 shadow-xl">
+      {menu && <div role="menu" className="todo-menu absolute right-0 top-8 z-20 w-44 rounded-xl border p-1.5 shadow-xl">
         <button role="menuitem" className="menu-item" onClick={() => { setMenu(false); onEdit(); }}><Pencil size={15} />Chỉnh sửa</button>
         {todo.status === "pending" ? <button role="menuitem" className="menu-item" onClick={() => { setMenu(false); onCancel(); }}><Ban size={15} />Huỷ</button> : <button role="menuitem" className="menu-item" onClick={() => { setMenu(false); onRestore(); }}><RotateCcw size={15} />Khôi phục</button>}
         <button role="menuitem" className="menu-item text-red-700" onClick={() => { if (confirmDelete) { setMenu(false); onDelete(); } else setConfirmDelete(true); }}><Trash2 size={15} />{confirmDelete ? "Xác nhận xoá" : "Xoá"}</button>

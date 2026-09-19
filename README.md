@@ -36,6 +36,7 @@
 - Zod cho kiểm tra form.
 - date-fns cho thao tác ngày giờ.
 - Lucide React cho biểu tượng.
+- Mascot Koboyo dùng [`page-mascot`](https://koboyo.com/page-mascot) và các sprite sloth được serve cục bộ từ `public/mascots` (giấy phép MIT).
 - Vercel để deploy.
 
 ## 1. Chạy ở chế độ demo

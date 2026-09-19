@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { ArrowLeft, ArrowRight, BatteryCharging, BellRing, CalendarDays, Check, ListChecks, X } from "lucide-react";
+import { MascotAvatar } from "@/components/mascot-avatar";
 
 const STORAGE_PREFIX = "hom-nay-the-nao:onboarding:v1:";
 const completedInMemory = new Set<string>();
@@ -364,6 +365,7 @@ export function OnboardingTour({ open, profileId, onClose }: OnboardingTourProps
           <p className="tour-kicker">Khám phá nhanh</p>
           <h2 id={titleId} className="tour-title">{step.title}</h2>
         </div>
+        <MascotAvatar size={52} decorative className="tour-mascot" />
         <button type="button" className="tour-close" onClick={completeAndClose} aria-label="Đóng hướng dẫn"><X size={18} /></button>
       </div>
       <p id={descriptionId} className="tour-description" aria-live="polite">{step.description}</p>
