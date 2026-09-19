@@ -28,7 +28,7 @@ export interface EnergyRepository {
   createTodo(draft: TodoDraft): Promise<Todo>;
   updateTodo(todo: Todo, changes: TodoChanges): Promise<Todo>;
   deleteTodo(todo: Todo): Promise<void>;
-  deleteLinkedTodo(todo: Todo, activity: Activity): Promise<void>;
+  deleteLinkedTodo(todo: Todo, activity: Activity, scope: ActionScope): Promise<void>;
 }
 
 export function isSupabaseConfigured(): boolean {

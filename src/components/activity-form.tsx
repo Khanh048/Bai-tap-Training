@@ -78,6 +78,8 @@ export function ActivityForm({ activity, activities, initialEnergy, initialConte
   const [impact, setImpact] = useState(activity?.expected_impact ?? -10);
   const [note, setNote] = useState(activity?.note ?? "");
   const [recurrence, setRecurrence] = useState<ActivityDraft["recurrence"]>(activity?.recurrence ?? "none");
+  const [recurrenceEndMode, setRecurrenceEndMode] = useState<"date" | "forever">(activity?.recurrence_end_date ? "date" : "forever");
+  const [recurrenceEndDate, setRecurrenceEndDate] = useState(activity?.recurrence_end_date ?? initialDate);
   const [scope, setScope] = useState<ActionScope>("single");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -103,15 +105,18 @@ export function ActivityForm({ activity, activities, initialEnergy, initialConte
     const start = parseVietnamDateTime(startsAt);
     const end = parseVietnamDateTime(endsAt);
     if (!start || !end) return null;
+    const effectiveRecurrence = scheduleType === "fixed" ? recurrence : "none";
     return {
       id: activity?.id ?? "draft", user_id: activity?.user_id ?? "draft", title, category, schedule_type: scheduleType,
       starts_at: start.toISOString(), ends_at: end.toISOString(), expected_impact: impact,
       actual_energy_after: activity?.actual_energy_after ?? null, status: activity?.status ?? "scheduled", note,
-      series_id: activity?.series_id ?? null, recurrence, occurrence_index: activity?.occurrence_index ?? 0,
+      series_id: activity?.series_id ?? null, recurrence: effectiveRecurrence,
+      recurrence_end_date: effectiveRecurrence === "weekly" && recurrenceEndMode === "date" ? recurrenceEndDate : null,
+      occurrence_index: activity?.occurrence_index ?? 0,
       overdue_acknowledged_at: activity?.overdue_acknowledged_at ?? null,
       created_at: activity?.created_at ?? "", updated_at: activity?.updated_at ?? "",
     };
-  }, [activity, category, endsAt, impact, note, recurrence, scheduleType, startsAt, title]);
+  }, [activity, category, endsAt, impact, note, recurrence, recurrenceEndDate, recurrenceEndMode, scheduleType, startsAt, title]);
   const candidateDate = candidate ? dateKey(new Date(candidate.starts_at)) : startsAt.slice(0, 10);
   const previewReady = Boolean(candidate && previewContext.date === candidateDate && previewContext.status === "ready");
   const sameDayActivities = previewReady ? previewContext.activities : [];
@@ -156,10 +161,30 @@ export function ActivityForm({ activity, activities, initialEnergy, initialConte
       setError("Ngày giờ chưa hợp lệ.");
       return;
     }
+    const effectiveRecurrence = scheduleType === "fixed" ? recurrence : "none";
+    const effectiveEndDate = effectiveRecurrence === "weekly" && recurrenceEndMode === "date" ? recurrenceEndDate : null;
+    const selectedSeriesEndDate = recurrenceEndMode === "date" ? recurrenceEndDate : null;
+    if (activity?.series_id && scope === "single" && selectedSeriesEndDate !== activity.recurrence_end_date) {
+      setError("Ngày kết thúc lặp thuộc cả chuỗi. Hãy chọn ‘Buổi này + sau’ hoặc ‘Cả chuỗi’ để thay đổi.");
+      return;
+    }
+    if (effectiveEndDate !== null) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveEndDate) || !parseVietnamDateTime(`${effectiveEndDate}T00:00`)) {
+        setError("Hãy chọn ngày kết thúc lặp hợp lệ.");
+        return;
+      }
+      const endUsesEditedStart = !activity?.series_id || scope === "future";
+      if (endUsesEditedStart && effectiveEndDate < parsed.data.startsAt.slice(0, 10)) {
+        setError(scope === "future"
+          ? "Ngày kết thúc lặp cần bằng hoặc sau ngày bắt đầu của nhánh mới."
+          : "Ngày kết thúc lặp cần bằng hoặc sau ngày bắt đầu.");
+        return;
+      }
+    }
     setBusy(true);
     onBusyChange(true);
     try {
-      await onSave({ title: parsed.data.title, category, schedule_type: scheduleType, starts_at: start.toISOString(), ends_at: end.toISOString(), expected_impact: parsed.data.expectedImpact, note: note.trim(), recurrence }, scope);
+      await onSave({ title: parsed.data.title, category, schedule_type: scheduleType, starts_at: start.toISOString(), ends_at: end.toISOString(), expected_impact: parsed.data.expectedImpact, note: note.trim(), recurrence: effectiveRecurrence, recurrence_end_date: effectiveEndDate }, scope);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Chưa thể lưu hoạt động.");
     } finally {
@@ -188,9 +213,18 @@ export function ActivityForm({ activity, activities, initialEnergy, initialConte
       <div className="mt-3 flex flex-wrap gap-2">{[-30, -15, 0, 15, 30].map((value) => <button type="button" key={value} onClick={() => setImpact(value)} className={`chip ${impact === value ? "chip-active" : ""}`}>{value > 0 ? "+" : ""}{value}</button>)}</div>
     </div>
     <label className="block text-sm font-bold text-ink-800">Ghi chú<textarea value={note} onChange={(event) => setNote(event.target.value)} className="field mt-2 min-h-20 resize-y" placeholder="Điều gì giúp hoạt động này dễ chịu hơn?" /></label>
-    {!activity && <label className="surface-muted flex items-start gap-3 p-4"><input type="checkbox" checked={recurrence === "weekly"} onChange={(event) => setRecurrence(event.target.checked ? "weekly" : "none")} className="mt-1 size-4 accent-sage-700" /><span><strong className="block text-sm text-ink-800">Lặp lại mỗi tuần</strong><span className="mt-1 block text-xs leading-5 text-ink-500">Tạo trước 12 buổi, bạn có thể sửa từng buổi hoặc cả chuỗi.</span></span></label>}
+    <fieldset disabled={scheduleType === "flexible"} className={`surface-muted space-y-3 p-4 transition-opacity ${scheduleType === "flexible" ? "opacity-50" : ""}`}>
+      <legend className="px-1 text-sm font-bold text-ink-800">Lặp lại và kết thúc</legend>
+      <label className="flex items-start gap-3"><input type="checkbox" checked={recurrence === "weekly"} onChange={(event) => setRecurrence(event.target.checked ? "weekly" : "none")} className="mt-1 size-4 accent-sage-700" /><span><strong className="block text-sm text-ink-800">Lặp lại mỗi tuần</strong><span className="mt-1 block text-xs leading-5 text-ink-500">Chỉ tạo các buổi khi khoảng lịch đang xem cần đến.</span></span></label>
+      <div className={`grid gap-2 sm:grid-cols-2 ${recurrence !== "weekly" ? "opacity-50" : ""}`}>
+        <label className="flex items-center gap-2 rounded-xl border border-sage-200 bg-white px-3 py-2 text-sm font-semibold text-ink-700"><input type="radio" name="recurrence-end" checked={recurrenceEndMode === "date"} disabled={recurrence !== "weekly"} onChange={() => setRecurrenceEndMode("date")} />Theo ngày</label>
+        <label className="flex items-center gap-2 rounded-xl border border-sage-200 bg-white px-3 py-2 text-sm font-semibold text-ink-700"><input type="radio" name="recurrence-end" checked={recurrenceEndMode === "forever"} disabled={recurrence !== "weekly"} onChange={() => setRecurrenceEndMode("forever")} />Vĩnh viễn</label>
+      </div>
+      {recurrenceEndMode === "date" && <label className={`block text-xs font-bold text-ink-700 ${recurrence !== "weekly" ? "opacity-50" : ""}`}>Lặp đến hết ngày<input type="date" min={scheduleType === "fixed" && recurrence === "weekly" && (!activity?.series_id || scope === "future") ? startsAt.slice(0, 10) : undefined} value={recurrenceEndDate} disabled={recurrence !== "weekly"} onChange={(event) => setRecurrenceEndDate(event.target.value)} className="field mt-1.5" /></label>}
+      {scheduleType === "flexible" && <p className="text-xs leading-5 text-ink-500">Lịch linh hoạt luôn là một buổi, không lặp.</p>}
+    </fieldset>
     {activity?.series_id && <fieldset><legend className="text-sm font-bold text-ink-800">Áp dụng thay đổi cho</legend><div className="mt-2 grid grid-cols-3 gap-2">{(["single", "future", "all"] as const).map((item) => <label key={item} className={`cursor-pointer rounded-xl border p-2 text-center text-xs font-bold ${scope === item ? "border-sage-600 bg-sage-50 text-sage-800" : "border-sage-200"}`}><input className="sr-only" type="radio" checked={scope === item} onChange={() => setScope(item)} />{item === "single" ? "Buổi này" : item === "future" ? "Buổi này + sau" : "Cả chuỗi"}</label>)}</div></fieldset>}
-    {recurrence === "weekly" && <p className="text-xs leading-5 text-ink-500">Cảnh báo bên dưới chỉ xem trước lần xuất hiện đầu tiên; các buổi lặp sau chưa được kiểm tra trong form này.</p>}
+    {scheduleType === "fixed" && recurrence === "weekly" && <p className="text-xs leading-5 text-ink-500">Cảnh báo bên dưới chỉ xem trước lần xuất hiện đầu tiên; các buổi lặp sau chưa được kiểm tra trong form này.</p>}
     {candidate && previewContext.date === candidateDate && previewContext.status === "loading" && <div className="surface-muted flex items-center gap-2 px-4 py-3 text-sm text-sage-800"><LoaderCircle size={17} className="animate-spin" />Đang tải lịch và năng lượng của ngày đã chọn…</div>}
     {candidate && previewContext.date === candidateDate && previewContext.status === "unavailable" && <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950"><div className="flex gap-3"><AlertCircle className="mt-0.5 shrink-0" size={19} /><p>Chưa tải được dữ liệu ngày này nên không thể xem trước trùng lịch hoặc năng lượng. Bạn vẫn có thể lưu hoạt động.</p></div></div>}
     {previewReady && (overlap || (projected !== null && projected < 30)) && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950"><div className="flex gap-3"><AlertCircle className="mt-0.5 shrink-0" size={19} /><div>{overlap && <p>Lịch này đang chạm một hoạt động khác. Bạn có muốn chừa một khoảng thở không?</p>}{projected !== null && projected < 30 && <p>Năng lượng dự kiến sẽ còn <strong>{projected}%</strong>. Mình có nên nhẹ tay hơn một chút?</p>}{scheduleType === "flexible" && <button type="button" className="mt-2 inline-flex items-center gap-2 font-bold underline" onClick={() => startRef.current?.focus()}><CalendarClock size={16} />Chọn thời gian khác</button>}</div></div></div>}

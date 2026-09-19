@@ -46,6 +46,9 @@ UI chỉ làm việc với `EnergyRepository`, không biết dữ liệu đến 
 erDiagram
     AUTH_USERS ||--|| PROFILES : has
     AUTH_USERS ||--o{ DAILY_CHECKINS : records
+    AUTH_USERS ||--o{ ACTIVITY_SERIES : owns
+    ACTIVITY_SERIES ||--o{ ACTIVITIES : materializes
+    ACTIVITY_SERIES ||--o{ ACTIVITY_SERIES_EXCLUSIONS : excludes
     AUTH_USERS ||--o{ ACTIVITIES : owns
     AUTH_USERS ||--o{ TODOS : owns
 
@@ -61,6 +64,23 @@ erDiagram
         date checkin_date
         smallint energy_level
         text note
+    }
+
+    ACTIVITY_SERIES {
+        uuid id PK
+        uuid user_id FK
+        text title
+        text category
+        timestamptz anchor_starts_at
+        timestamptz anchor_ends_at
+        smallint expected_impact
+        date ends_on
+    }
+
+    ACTIVITY_SERIES_EXCLUSIONS {
+        uuid series_id FK
+        uuid user_id FK
+        integer occurrence_index
     }
 
     ACTIVITIES {
@@ -102,8 +122,9 @@ Project Supabase mới phải chạy đầy đủ migration trong SQL Editor the
 
 3. `supabase/migrations/003_integer_energy_remove_recovery.sql` — chuyển dữ liệu `recovery` cũ sang `flexible`, giới hạn lịch còn `fixed`/`flexible`, và cho phép mọi mức năng lượng nguyên trong miền hợp lệ.
 4. `supabase/migrations/004_link_todos_to_activities.sql` — thêm `todos.activity_id` nullable, FK `on delete set null` và unique partial index theo user/activity.
+5. `supabase/migrations/005_activity_series_end.sql` — thêm `activity_series`, exclusions, backfill horizon chuỗi cũ, FK cascade, RLS và unique occurrence conflict target.
 
-Dashboard yêu cầu chạy đúng **001 → 002 → 003 → 004** để dùng Todo. Các request profile/check-in/lịch là core và vẫn render nếu schema Todo/overdue chưa sẵn sàng; màn Todo hiển thị hướng dẫn cùng retry riêng. Migration 004 không backfill giá trị legacy tuỳ ý: Todo cũ giữ `activity_id = null`; Todo pending được liên kết ở lần chỉnh sửa kế tiếp, còn Todo inactive phải được khôi phục trước để tránh tạo Activity đang chạy cho checklist đã đóng.
+Dashboard yêu cầu chạy đúng **001 → 002 → 003 → 004 → 005**. Migration 005 là bắt buộc cho lịch: runtime sẽ báo hướng dẫn rõ ràng thay vì âm thầm quay lại mô hình 12 buổi. Các request profile/check-in vẫn dùng schema nền tảng; Todo tiếp tục có retry riêng khi 002–004 chưa sẵn sàng. Migration 004 không backfill giá trị legacy tuỳ ý: Todo cũ giữ `activity_id = null`; Todo pending được liên kết ở lần chỉnh sửa kế tiếp, còn Todo inactive phải được khôi phục trước để tránh tạo Activity đang chạy cho checklist đã đóng.
 
 ### Hợp đồng lịch và năng lượng
 
@@ -114,13 +135,19 @@ Dashboard yêu cầu chạy đúng **001 → 002 → 003 → 004** để dùng T
 
 ### Lịch lặp
 
-Một lịch lặp hằng tuần tạo 12 bản ghi có cùng `series_id`. `occurrence_index` từ 0 đến 11 là thứ tự bất biến, dùng để xác định:
+Lịch weekly chỉ hợp lệ với `schedule_type = fixed`. `activity_series` là master giữ template, anchor và `ends_on` (`null` nghĩa là vĩnh viễn); `activities` chỉ chứa occurrence đã materialize. `listActivities(from,to)` tính trực tiếp index theo mỗi 7 ngày từ anchor, chỉ upsert các occurrence giao với range được hỏi, không sinh các tuần trung gian. `ends_on` là ngày inclusive.
 
-- `single`: chỉ một buổi.
-- `future`: buổi đang chọn và những buổi có index lớn hơn.
-- `all`: toàn bộ series.
+`activity_series_exclusions` lưu `(series_id, occurrence_index)` đã bỏ. Nhờ vậy xoá `single` ghi exclusion trước khi xoá occurrence và lần list sau không sinh lại. Unique `(user_id, series_id, occurrence_index)` cùng upsert `ignoreDuplicates` chống hai request đồng thời tạo trùng row.
 
-Việc dùng index thay vì giờ bắt đầu giúp phạm vi vẫn đúng khi một buổi đã được dời sang ngày khác.
+Scope được xử lý như sau:
+
+- `single`: chỉ occurrence hiện tại; khi chuyển sang flexible/bỏ lặp, occurrence được detach và slot gốc bị exclude.
+- `future`: master cũ kết thúc trước source; edit recurring tạo nhánh master mới từ source, còn chuyển flexible sẽ detach source và bỏ materialized future.
+- `all`: cập nhật template/master và các row đã materialize; chuyển flexible biến các row đó thành standalone trước khi xoá master.
+
+Xoá `future` cắt `ends_on` trước source rồi dọn future materialized; xoá `all` xoá master và cascade occurrences/exclusions. Các thao tác recurring chạm nhiều bảng (create master + occurrence, detach/split/update scope) và xoá cặp Todo–Activity đều đi qua PostgreSQL RPC để commit hoặc rollback như một giao dịch; RPC kiểm tra `auth.uid()`, ownership, scope và invariant ngày. Migration 005 backfill các series 12-row cũ với `ends_on = max(occurrence date)`, nên dữ liệu cũ không tự dưng mở rộng vô hạn. Form nhận `recurrence_end_date` từ relation master nhưng field ảo này không bao giờ được gửi vào insert/update bảng `activities`.
+
+Overdue dùng policy lịch sử hữu hạn: trước khi query, repository materialize recurrence từ đúng 28 ngày trước mốc `before` đến `before`, rồi chỉ trả backlog trong horizon đó. Policy này tránh sinh toàn bộ quá khứ của series vĩnh viễn nhưng vẫn khôi phục các buổi bị lỡ khi ứng dụng không được mở trong vài tuần.
 
 ## 4. Thuật toán năng lượng
 
@@ -182,10 +209,12 @@ sequenceDiagram
     F->>F: Kiểm tra trùng giờ / pin dưới 30
     U->>F: Xác nhận lưu
     F->>R: createActivity
-    R->>D: Insert 1 hoặc 12 occurrence
+    R->>D: Insert standalone hoặc series master + occurrence đầu
     D-->>R: Hoạt động đã lưu
     R-->>F: Reload dashboard
 ```
+
+Các lần tải Today/Week/Month vẫn gọi `listActivities` như trước; repository materialize lazy đúng range rồi trả occurrence cho UI.
 
 ### Todo liên kết Activity
 
@@ -226,7 +255,7 @@ Trình duyệt chỉ dùng publishable key. Key này không thể bỏ qua RLS. 
 
 ## 8. Giới hạn hiện tại
 
-- Lịch lặp tạo trước 12 tuần, chưa phải recurrence vô hạn.
+- Lịch lặp hỗ trợ vĩnh viễn nhưng chỉ materialize lazy theo range, không tạo vô hạn row.
 - Todo và lịch chỉ tồn tại trong planner, chưa đồng bộ Google Calendar hay dịch vụ lịch bên ngoài.
 - Reminder được quét phía client mỗi 30 giây và khi tab active; website cùng trình duyệt phải còn mở. Chưa có background push/service worker, và notification phụ thuộc quyền của trình duyệt/hệ điều hành.
 - Chưa tự động kéo thả hoặc tự quyết định lịch thay người dùng.

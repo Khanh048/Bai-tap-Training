@@ -27,6 +27,21 @@ export interface DailyCheckin {
   updated_at: string;
 }
 
+export interface ActivitySeries {
+  id: string;
+  user_id: string;
+  title: string;
+  category: ActivityCategory;
+  schedule_type: "fixed";
+  anchor_starts_at: string;
+  anchor_ends_at: string;
+  expected_impact: number;
+  note: string;
+  ends_on: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Activity {
   id: string;
   user_id: string;
@@ -41,6 +56,7 @@ export interface Activity {
   note: string;
   series_id: string | null;
   recurrence: Recurrence;
+  recurrence_end_date: string | null;
   occurrence_index: number;
   overdue_acknowledged_at: string | null;
   created_at: string;
@@ -49,11 +65,11 @@ export interface Activity {
 
 export type ActivityDraft = Pick<
   Activity,
-  "title" | "category" | "schedule_type" | "starts_at" | "ends_at" | "expected_impact" | "note" | "recurrence"
+  "title" | "category" | "schedule_type" | "starts_at" | "ends_at" | "expected_impact" | "note" | "recurrence" | "recurrence_end_date"
 >;
 
 export type ActivityChanges = Partial<
-  Pick<Activity, "title" | "category" | "schedule_type" | "starts_at" | "ends_at" | "expected_impact" | "actual_energy_after" | "status" | "note" | "overdue_acknowledged_at">
+  Pick<Activity, "title" | "category" | "schedule_type" | "starts_at" | "ends_at" | "expected_impact" | "actual_energy_after" | "status" | "note" | "recurrence" | "recurrence_end_date" | "overdue_acknowledged_at">
 >;
 
 export interface Todo {

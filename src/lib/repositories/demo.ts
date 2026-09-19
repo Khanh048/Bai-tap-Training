@@ -1,4 +1,3 @@
-import { addWeeks } from "date-fns";
 import { dateKey, parseVietnamDateTime } from "@/lib/dates";
 import { compareActivitiesByImpactTime } from "@/lib/energy";
 import type { EnergyRepository } from "@/lib/repository";
@@ -12,6 +11,7 @@ import {
   type Activity,
   type ActivityChanges,
   type ActivityDraft,
+  type ActivitySeries,
   type DailyCheckin,
   type Profile,
   type Todo,
@@ -22,10 +22,17 @@ import {
 const STORAGE_KEY = "hom-nay-the-nao-demo-v1";
 const USER_ID = "demo-user";
 
+interface SeriesExclusion {
+  series_id: string;
+  occurrence_index: number;
+}
+
 interface DemoData {
   profile: Profile;
   checkins: DailyCheckin[];
   activities: Activity[];
+  activitySeries: ActivitySeries[];
+  activitySeriesExclusions: SeriesExclusion[];
   todos: Todo[];
 }
 
@@ -47,10 +54,12 @@ function initialData(): DemoData {
     profile: { id: USER_ID, display_name: "An", default_energy: 70 },
     checkins: [],
     activities: [
-      { id: id(), user_id: USER_ID, title: "Tập trung làm việc", category: "work", schedule_type: "fixed", starts_at: at(9), ends_at: at(10, 30), expected_impact: -15, actual_energy_after: null, status: "scheduled", note: "Hoàn thành việc quan trọng nhất", series_id: null, recurrence: "none", occurrence_index: 0, overdue_acknowledged_at: null, created_at: timestamp, updated_at: timestamp },
-      { id: id(), user_id: USER_ID, title: "Ăn trưa và đi bộ", category: "rest", schedule_type: "flexible", starts_at: at(12), ends_at: at(13), expected_impact: 15, actual_energy_after: null, status: "scheduled", note: "", series_id: null, recurrence: "none", occurrence_index: 0, overdue_acknowledged_at: null, created_at: timestamp, updated_at: timestamp },
-      { id: id(), user_id: USER_ID, title: "Học một điều mới", category: "study", schedule_type: "flexible", starts_at: at(15), ends_at: at(16), expected_impact: -10, actual_energy_after: null, status: "scheduled", note: "Có thể chuyển nếu cần nghỉ", series_id: null, recurrence: "none", occurrence_index: 0, overdue_acknowledged_at: null, created_at: timestamp, updated_at: timestamp },
+      { id: id(), user_id: USER_ID, title: "Tập trung làm việc", category: "work", schedule_type: "fixed", starts_at: at(9), ends_at: at(10, 30), expected_impact: -15, actual_energy_after: null, status: "scheduled", note: "Hoàn thành việc quan trọng nhất", series_id: null, recurrence: "none", recurrence_end_date: null, occurrence_index: 0, overdue_acknowledged_at: null, created_at: timestamp, updated_at: timestamp },
+      { id: id(), user_id: USER_ID, title: "Ăn trưa và đi bộ", category: "rest", schedule_type: "flexible", starts_at: at(12), ends_at: at(13), expected_impact: 15, actual_energy_after: null, status: "scheduled", note: "", series_id: null, recurrence: "none", recurrence_end_date: null, occurrence_index: 0, overdue_acknowledged_at: null, created_at: timestamp, updated_at: timestamp },
+      { id: id(), user_id: USER_ID, title: "Học một điều mới", category: "study", schedule_type: "flexible", starts_at: at(15), ends_at: at(16), expected_impact: -10, actual_energy_after: null, status: "scheduled", note: "Có thể chuyển nếu cần nghỉ", series_id: null, recurrence: "none", recurrence_end_date: null, occurrence_index: 0, overdue_acknowledged_at: null, created_at: timestamp, updated_at: timestamp },
     ],
+    activitySeries: [],
+    activitySeriesExclusions: [],
     todos: [],
   };
 }
@@ -166,6 +175,7 @@ function parseActivity(value: unknown): ParsedActivity | null {
   if (value.note !== undefined && typeof value.note !== "string") return null;
   if (value.series_id !== undefined && value.series_id !== null && typeof value.series_id !== "string") return null;
   if (value.recurrence !== undefined && !isOneOf(value.recurrence, recurrenceTypes)) return null;
+  if (value.recurrence_end_date !== undefined && value.recurrence_end_date !== null && !isDateKey(value.recurrence_end_date)) return null;
   if (value.occurrence_index !== undefined
     && (typeof value.occurrence_index !== "number" || !Number.isInteger(value.occurrence_index))) return null;
   if (value.overdue_acknowledged_at !== undefined
@@ -190,6 +200,7 @@ function parseActivity(value: unknown): ParsedActivity | null {
       note: value.note ?? "",
       series_id: seriesId,
       recurrence: value.recurrence ?? (seriesId ? "weekly" : "none"),
+      recurrence_end_date: value.recurrence_end_date ?? null,
       occurrence_index: value.occurrence_index ?? 0,
       overdue_acknowledged_at: value.overdue_acknowledged_at ?? null,
       created_at: value.created_at ?? value.starts_at,
@@ -200,6 +211,7 @@ function parseActivity(value: unknown): ParsedActivity | null {
       || value.note === undefined
       || value.series_id === undefined
       || value.recurrence === undefined
+      || value.recurrence_end_date === undefined
       || value.occurrence_index === undefined
       || value.overdue_acknowledged_at === undefined
       || value.created_at === undefined
@@ -244,9 +256,33 @@ function parseTodo(value: unknown): { todo: Todo; migrated: boolean } | null {
   return { todo, migrated: value.activity_id === undefined };
 }
 
+function parseActivitySeries(value: unknown): ActivitySeries | null {
+  if (!isRecord(value)
+    || typeof value.id !== "string"
+    || typeof value.user_id !== "string"
+    || typeof value.title !== "string"
+    || !isOneOf(value.category, activityCategories)
+    || value.schedule_type !== "fixed"
+    || !isIsoDateTime(value.anchor_starts_at)
+    || !isIsoDateTime(value.anchor_ends_at)
+    || !isIntegerInRange(value.expected_impact, -50, 50)
+    || typeof value.note !== "string"
+    || (value.ends_on !== null && !isDateKey(value.ends_on))
+    || !isIsoDateTime(value.created_at)
+    || !isIsoDateTime(value.updated_at)) return null;
+  return value as unknown as ActivitySeries;
+}
+
+function parseSeriesExclusion(value: unknown): SeriesExclusion | null {
+  if (!isRecord(value) || typeof value.series_id !== "string" || typeof value.occurrence_index !== "number" || !Number.isInteger(value.occurrence_index) || value.occurrence_index < 0) return null;
+  return { series_id: value.series_id, occurrence_index: value.occurrence_index };
+}
+
 function parseDemoData(value: unknown): ParsedDemoData | null {
   if (!isRecord(value) || !Array.isArray(value.checkins) || !Array.isArray(value.activities)) return null;
   if (value.todos !== undefined && !Array.isArray(value.todos)) return null;
+  if (value.activitySeries !== undefined && !Array.isArray(value.activitySeries)) return null;
+  if (value.activitySeriesExclusions !== undefined && !Array.isArray(value.activitySeriesExclusions)) return null;
   const profile = parseProfile(value.profile);
   if (!profile) return null;
 
@@ -266,6 +302,20 @@ function parseDemoData(value: unknown): ParsedDemoData | null {
     migrated ||= parsed.migrated;
   }
 
+  const activitySeries: ActivitySeries[] = [];
+  for (const item of value.activitySeries ?? []) {
+    const parsed = parseActivitySeries(item);
+    if (!parsed) return null;
+    activitySeries.push(parsed);
+  }
+  const activitySeriesExclusions: SeriesExclusion[] = [];
+  for (const item of value.activitySeriesExclusions ?? []) {
+    const parsed = parseSeriesExclusion(item);
+    if (!parsed) return null;
+    activitySeriesExclusions.push(parsed);
+  }
+  migrated ||= value.activitySeries === undefined || value.activitySeriesExclusions === undefined;
+
   const todos: Todo[] = [];
   for (const item of value.todos ?? []) {
     const parsed = parseTodo(item);
@@ -274,7 +324,7 @@ function parseDemoData(value: unknown): ParsedDemoData | null {
     migrated ||= parsed.migrated;
   }
 
-  return { data: { profile, checkins, activities, todos }, migrated };
+  return { data: { profile, checkins, activities, activitySeries, activitySeriesExclusions, todos }, migrated };
 }
 
 function normalizeActivities(activities: Activity[]): Activity[] {
@@ -289,7 +339,7 @@ function normalizeActivities(activities: Activity[]): Activity[] {
   }
   for (const [seriesId, occurrences] of series) {
     const existingIndexes = occurrences.map((activity) => activity.occurrence_index);
-    const indexesAreValid = existingIndexes.every((index) => Number.isInteger(index) && index >= 0 && index <= 11)
+    const indexesAreValid = existingIndexes.every((index) => Number.isInteger(index) && index >= 0)
       && new Set(existingIndexes).size === existingIndexes.length;
     const indexes = new Map<string, number>();
     if (indexesAreValid) occurrences.forEach((activity) => indexes.set(activity.id, activity.occurrence_index));
@@ -302,9 +352,68 @@ function normalizeActivities(activities: Activity[]): Activity[] {
     if (activity.recurrence === "none") return { ...activity, series_id: null, occurrence_index: 0 };
     const seriesId = activity.series_id ?? id();
     const occurrenceIndex = seriesIndexes.get(seriesId)?.get(activity.id) ?? 0;
-    if (occurrenceIndex > 11) return { ...activity, series_id: null, recurrence: "none", occurrence_index: 0 };
     return { ...activity, series_id: seriesId, occurrence_index: occurrenceIndex };
   });
+}
+
+function canonicalLegacyGrid(occurrences: Activity[]): {
+  source: Activity;
+  anchorStartsAt: string;
+  anchorEndsAt: string;
+} {
+  const candidates = occurrences.map((activity) => {
+    const offset = activity.occurrence_index * 7 * 86_400_000;
+    const anchorStartsAt = new Date(new Date(activity.starts_at).getTime() - offset).toISOString();
+    const anchorEndsAt = new Date(new Date(activity.ends_at).getTime() - offset).toISOString();
+    return { activity, anchorStartsAt, anchorEndsAt, key: `${anchorStartsAt}\u0000${anchorEndsAt}` };
+  });
+  const gridCounts = new Map<string, number>();
+  for (const candidate of candidates) gridCounts.set(candidate.key, (gridCounts.get(candidate.key) ?? 0) + 1);
+  const canonical = candidates.sort((left, right) =>
+    (gridCounts.get(right.key) ?? 0) - (gridCounts.get(left.key) ?? 0)
+    || left.anchorStartsAt.localeCompare(right.anchorStartsAt)
+    || left.anchorEndsAt.localeCompare(right.anchorEndsAt)
+    || left.activity.occurrence_index - right.activity.occurrence_index
+    || left.activity.starts_at.localeCompare(right.activity.starts_at)
+    || left.activity.id.localeCompare(right.activity.id))[0];
+  return { source: canonical.activity, anchorStartsAt: canonical.anchorStartsAt, anchorEndsAt: canonical.anchorEndsAt };
+}
+
+function ensureSeriesData(data: DemoData): DemoData {
+  const byId = new Map(data.activitySeries.map((series) => [series.id, series]));
+  const groups = new Map<string, Activity[]>();
+  for (const activity of data.activities) {
+    if (!activity.series_id || activity.recurrence !== "weekly") continue;
+    const group = groups.get(activity.series_id) ?? [];
+    group.push(activity);
+    groups.set(activity.series_id, group);
+  }
+  for (const [seriesId, occurrences] of groups) {
+    if (byId.has(seriesId)) continue;
+    const { source, anchorStartsAt, anchorEndsAt } = canonicalLegacyGrid(occurrences);
+    const existingIndexes = new Set(occurrences.map((item) => item.occurrence_index));
+    const finalIndex = Math.max(...existingIndexes);
+    const anchorDate = dateKey(new Date(anchorStartsAt));
+    const horizonStart = new Date(`${anchorDate}T00:00:00+07:00`).getTime();
+    const series: ActivitySeries = {
+      id: seriesId, user_id: source.user_id, title: source.title, category: source.category, schedule_type: "fixed",
+      anchor_starts_at: anchorStartsAt, anchor_ends_at: anchorEndsAt,
+      expected_impact: source.expected_impact, note: source.note,
+      ends_on: dateKey(new Date(horizonStart + finalIndex * 7 * 86_400_000)),
+      created_at: source.created_at, updated_at: source.updated_at,
+    };
+    data.activitySeries.push(series);
+    byId.set(seriesId, series);
+    for (let index = 0; index <= finalIndex; index += 1) {
+      if (!existingIndexes.has(index)) data.activitySeriesExclusions.push({ series_id: seriesId, occurrence_index: index });
+    }
+  }
+  data.activities = data.activities.map((activity) => ({
+    ...activity,
+    schedule_type: activity.series_id && byId.has(activity.series_id) ? "fixed" : activity.schedule_type,
+    recurrence_end_date: activity.series_id ? byId.get(activity.series_id)?.ends_on ?? null : null,
+  }));
+  return data;
 }
 
 function fallbackToMemory(data?: DemoData): DemoData {
@@ -358,9 +467,54 @@ function load(): DemoData {
     return data;
   }
 
-  const normalized = { ...decoded.data, activities: normalizeActivities(decoded.data.activities) };
-  if (decoded.migrated || JSON.stringify(normalized.activities) !== JSON.stringify(decoded.data.activities)) save(normalized);
+  const normalized = ensureSeriesData({ ...decoded.data, activities: normalizeActivities(decoded.data.activities) });
+  if (decoded.migrated || JSON.stringify(normalized) !== JSON.stringify(decoded.data)) save(normalized);
   return normalized;
+}
+
+const DAY_MS = 86_400_000;
+const WEEK_MS = 7 * DAY_MS;
+const OVERDUE_MATERIALIZATION_DAYS = 28;
+
+function cutoffBefore(series: ActivitySeries, occurrenceIndex: number): string {
+  return dateKey(new Date(new Date(series.anchor_starts_at).getTime() + occurrenceIndex * WEEK_MS - 86_400_000));
+}
+
+function finalOccurrenceIndex(series: ActivitySeries): number | null {
+  if (!series.ends_on) return null;
+  const anchorDate = dateKey(new Date(series.anchor_starts_at));
+  const anchorMs = new Date(`${anchorDate}T00:00:00+07:00`).getTime();
+  const endMs = new Date(`${series.ends_on}T00:00:00+07:00`).getTime();
+  return Math.floor((endMs - anchorMs) / WEEK_MS);
+}
+
+function materializeRange(data: DemoData, from: string, to: string): boolean {
+  const fromMs = new Date(from).getTime();
+  const toMs = new Date(to).getTime();
+  const existing = new Set(data.activities.filter((item) => item.series_id).map((item) => `${item.series_id}:${item.occurrence_index}`));
+  const exclusions = new Set(data.activitySeriesExclusions.map((item) => `${item.series_id}:${item.occurrence_index}`));
+  let changed = false;
+  for (const series of data.activitySeries) {
+    const anchorStart = new Date(series.anchor_starts_at).getTime();
+    const anchorEnd = new Date(series.anchor_ends_at).getTime();
+    const first = Math.max(0, Math.ceil((fromMs - anchorEnd) / WEEK_MS));
+    const last = Math.floor((toMs - anchorStart) / WEEK_MS);
+    for (let index = first; index <= last; index += 1) {
+      const key = `${series.id}:${index}`;
+      const startsAt = new Date(anchorStart + index * WEEK_MS).toISOString();
+      if ((series.ends_on && dateKey(new Date(startsAt)) > series.ends_on) || existing.has(key) || exclusions.has(key)) continue;
+      const now = new Date().toISOString();
+      data.activities.push({
+        id: id(), user_id: series.user_id, title: series.title, category: series.category, schedule_type: "fixed",
+        starts_at: startsAt, ends_at: new Date(anchorEnd + index * WEEK_MS).toISOString(), expected_impact: series.expected_impact,
+        actual_energy_after: null, status: "scheduled", note: series.note, series_id: series.id, recurrence: "weekly",
+        recurrence_end_date: series.ends_on, occurrence_index: index, overdue_acknowledged_at: null, created_at: now, updated_at: now,
+      });
+      existing.add(key);
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 function selected(activity: Activity, source: Activity, scope: ActionScope): boolean {
@@ -381,6 +535,38 @@ function changesForOccurrence(activity: Activity, source: Activity, changes: Act
   }
   if (result.status && result.status !== "completed") result.actual_energy_after = null;
   return result;
+}
+
+function deleteActivityFromData(data: DemoData, activityId: string, scope: ActionScope): void {
+  const source = data.activities.find((item) => item.id === activityId);
+  if (!source) throw new Error("Không tìm thấy hoạt động để xoá.");
+  const series = source.series_id ? data.activitySeries.find((item) => item.id === source.series_id) : null;
+  if (!series) {
+    data.activities = data.activities.filter((item) => item.id !== source.id);
+    data.todos = data.todos.map((todo) => todo.activity_id === source.id ? { ...todo, activity_id: null } : todo);
+    return;
+  }
+
+  const deletedIds = new Set(data.activities.filter((item) => selected(item, source, scope)).map((item) => item.id));
+  if (scope === "single") {
+    if (!data.activitySeriesExclusions.some((item) => item.series_id === series.id && item.occurrence_index === source.occurrence_index)) {
+      data.activitySeriesExclusions.push({ series_id: series.id, occurrence_index: source.occurrence_index });
+    }
+  } else if (scope === "future") {
+    if (source.occurrence_index === 0) {
+      data.activitySeries = data.activitySeries.filter((item) => item.id !== series.id);
+      data.activitySeriesExclusions = data.activitySeriesExclusions.filter((item) => item.series_id !== series.id);
+    } else {
+      series.ends_on = cutoffBefore(series, source.occurrence_index);
+      series.updated_at = new Date().toISOString();
+      data.activitySeriesExclusions = data.activitySeriesExclusions.filter((item) => item.series_id !== series.id || item.occurrence_index < source.occurrence_index);
+    }
+  } else {
+    data.activitySeries = data.activitySeries.filter((item) => item.id !== series.id);
+    data.activitySeriesExclusions = data.activitySeriesExclusions.filter((item) => item.series_id !== series.id);
+  }
+  data.activities = data.activities.filter((item) => !deletedIds.has(item.id));
+  data.todos = data.todos.map((todo) => todo.activity_id && deletedIds.has(todo.activity_id) ? { ...todo, activity_id: null } : todo);
 }
 
 export class DemoRepository implements EnergyRepository {
@@ -430,15 +616,24 @@ export class DemoRepository implements EnergyRepository {
   }
 
   async listActivities(from: string, to: string): Promise<Activity[]> {
-    return load().activities
+    const data = load();
+    if (materializeRange(data, from, to)) save(data);
+    return data.activities
       .filter((item) => item.starts_at <= to && item.ends_at >= from)
       .sort(compareActivitiesByImpactTime);
   }
 
   async listOverdueActivities(before: string): Promise<Activity[]> {
-    return load().activities
+    const beforeTime = new Date(before).getTime();
+    if (!Number.isFinite(beforeTime)) throw new Error("Mốc thời gian kiểm tra quá hạn không hợp lệ.");
+    const historicalFrom = new Date(beforeTime - OVERDUE_MATERIALIZATION_DAYS * DAY_MS).toISOString();
+    const data = load();
+    // Product policy: materialize and show at most the previous 28 days.
+    if (materializeRange(data, historicalFrom, before)) save(data);
+    return data.activities
       .filter((item) => item.status === "scheduled"
         && item.overdue_acknowledged_at === null
+        && item.ends_at >= historicalFrom
         && item.ends_at < before)
       .sort(compareActivitiesByImpactTime);
   }
@@ -447,43 +642,177 @@ export class DemoRepository implements EnergyRepository {
     validateActivityEnergy({ expected_impact: draft.expected_impact, actual_energy_after: null });
     const data = load();
     const now = new Date().toISOString();
-    const seriesId = draft.recurrence === "weekly" ? id() : null;
-    const count = draft.recurrence === "weekly" ? 12 : 1;
-    const created = Array.from({ length: count }, (_, index): Activity => ({
+    const recurring = draft.schedule_type === "fixed" && draft.recurrence === "weekly";
+    const recurrenceEndDate = recurring ? draft.recurrence_end_date : null;
+    if (recurrenceEndDate && recurrenceEndDate < dateKey(new Date(draft.starts_at))) {
+      throw new Error("Ngày kết thúc lặp cần bằng hoặc sau ngày bắt đầu.");
+    }
+    const seriesId = recurring ? id() : null;
+    if (seriesId) data.activitySeries.push({
+      id: seriesId, user_id: USER_ID, title: draft.title, category: draft.category, schedule_type: "fixed",
+      anchor_starts_at: draft.starts_at, anchor_ends_at: draft.ends_at, expected_impact: draft.expected_impact,
+      note: draft.note, ends_on: recurrenceEndDate, created_at: now, updated_at: now,
+    });
+    const created: Activity = {
       ...draft,
-      id: id(),
-      user_id: USER_ID,
-      starts_at: addWeeks(new Date(draft.starts_at), index).toISOString(),
-      ends_at: addWeeks(new Date(draft.ends_at), index).toISOString(),
-      actual_energy_after: null,
-      status: "scheduled",
-      series_id: seriesId,
-      occurrence_index: index,
-      overdue_acknowledged_at: null,
-      created_at: now,
-      updated_at: now,
-    }));
-    data.activities.push(...created);
+      id: id(), user_id: USER_ID, schedule_type: recurring ? "fixed" : draft.schedule_type,
+      recurrence: recurring ? "weekly" : "none", recurrence_end_date: recurrenceEndDate,
+      actual_energy_after: null, status: "scheduled", series_id: seriesId, occurrence_index: 0,
+      overdue_acknowledged_at: null, created_at: now, updated_at: now,
+    };
+    data.activities.push(created);
     save(data);
-    return created;
+    return [created];
   }
 
   async updateActivity(activity: Activity, changes: ActivityChanges, scope: ActionScope): Promise<void> {
     const data = load();
     const now = new Date().toISOString();
-    const updatedActivities = data.activities.map((item) => selected(item, activity, scope)
-      ? { ...item, ...changesForOccurrence(item, activity, changes), updated_at: now }
-      : item);
-    updatedActivities.forEach(validateActivityEnergy);
-    data.activities = updatedActivities;
+    const source = data.activities.find((item) => item.id === activity.id);
+    if (!source) throw new Error("Không tìm thấy hoạt động để cập nhật.");
+    const series = source.series_id ? data.activitySeries.find((item) => item.id === source.series_id) : null;
+    if (series && scope === "single" && changes.recurrence_end_date !== undefined
+      && changes.recurrence_end_date !== series.ends_on) {
+      throw new Error("Ngày kết thúc lặp thuộc chuỗi. Hãy chọn ‘Buổi này + sau’ hoặc ‘Cả chuỗi’.");
+    }
+    if (!series) {
+      const makeRecurring = (changes.schedule_type ?? source.schedule_type) === "fixed" && changes.recurrence === "weekly";
+      if (makeRecurring) {
+        const startsAt = changes.starts_at ?? source.starts_at;
+        const endsAt = changes.ends_at ?? source.ends_at;
+        const endsOn = changes.recurrence_end_date ?? null;
+        if (endsOn && endsOn < dateKey(new Date(startsAt))) throw new Error("Ngày kết thúc lặp cần bằng hoặc sau ngày bắt đầu.");
+        const seriesId = id();
+        data.activitySeries.push({
+          id: seriesId, user_id: source.user_id, title: changes.title ?? source.title, category: changes.category ?? source.category,
+          schedule_type: "fixed", anchor_starts_at: startsAt, anchor_ends_at: endsAt,
+          expected_impact: changes.expected_impact ?? source.expected_impact, note: changes.note ?? source.note,
+          ends_on: endsOn, created_at: now, updated_at: now,
+        });
+        const updated: Activity = { ...source, ...changes, schedule_type: "fixed", series_id: seriesId, recurrence: "weekly", recurrence_end_date: endsOn, occurrence_index: 0, updated_at: now };
+        validateActivityEnergy(updated);
+        data.activities = data.activities.map((item) => item.id === source.id ? updated : item);
+        save(data);
+        return;
+      }
+      const normalized = changes.schedule_type === "flexible" || changes.recurrence === "none"
+        ? { ...changes, recurrence: "none" as const, recurrence_end_date: null }
+        : changes;
+      const updated = { ...source, ...normalized, series_id: null, occurrence_index: 0, updated_at: now };
+      validateActivityEnergy(updated);
+      data.activities = data.activities.map((item) => item.id === source.id ? updated : item);
+      save(data);
+      return;
+    }
+
+    const detach = changes.schedule_type === "flexible" || changes.recurrence === "none";
+    if (detach) {
+      const targets = data.activities.filter((item) => selected(item, source, scope));
+      if (scope === "all") {
+        const resultSchedule = changes.schedule_type ?? source.schedule_type;
+        data.activities = data.activities.map((item) => item.series_id === series.id
+          ? { ...item, ...changesForOccurrence(item, source, changes), schedule_type: resultSchedule, series_id: null, recurrence: "none", recurrence_end_date: null, occurrence_index: 0, updated_at: now }
+          : item);
+        data.activitySeries = data.activitySeries.filter((item) => item.id !== series.id);
+        data.activitySeriesExclusions = data.activitySeriesExclusions.filter((item) => item.series_id !== series.id);
+      } else {
+        data.activitySeriesExclusions.push({ series_id: series.id, occurrence_index: source.occurrence_index });
+        if (scope === "future") {
+          if (source.occurrence_index === 0) {
+            data.activitySeries = data.activitySeries.filter((item) => item.id !== series.id);
+            data.activitySeriesExclusions = data.activitySeriesExclusions.filter((item) => item.series_id !== series.id);
+          } else {
+            series.ends_on = cutoffBefore(series, source.occurrence_index);
+            series.updated_at = now;
+          }
+          const futureIds = new Set(targets.filter((item) => item.id !== source.id).map((item) => item.id));
+          data.activities = data.activities.filter((item) => !futureIds.has(item.id));
+          data.todos = data.todos.map((todo) => todo.activity_id && futureIds.has(todo.activity_id) ? { ...todo, activity_id: null } : todo);
+        }
+        const resultSchedule = changes.schedule_type ?? source.schedule_type;
+        data.activities = data.activities.map((item) => item.id === source.id
+          ? { ...item, ...changesForOccurrence(item, source, changes), schedule_type: resultSchedule, series_id: null, recurrence: "none", recurrence_end_date: null, occurrence_index: 0, updated_at: now }
+          : item);
+      }
+      data.activities.forEach(validateActivityEnergy);
+      save(data);
+      return;
+    }
+
+    const requestedEnd = changes.recurrence_end_date === undefined ? series.ends_on : changes.recurrence_end_date;
+    if (scope === "future" || scope === "all") {
+      const anchorStart = scope === "future"
+        ? changes.starts_at ?? source.starts_at
+        : new Date(new Date(series.anchor_starts_at).getTime()
+          + (changes.starts_at ? new Date(changes.starts_at).getTime() - new Date(source.starts_at).getTime() : 0)).toISOString();
+      if (requestedEnd && requestedEnd < dateKey(new Date(anchorStart))) {
+        throw new Error("Ngày kết thúc lặp cần bằng hoặc sau ngày bắt đầu của chuỗi.");
+      }
+    }
+
+    if (scope === "future") {
+      const newId = id();
+      const newStart = changes.starts_at ?? source.starts_at;
+      const newEnd = changes.ends_at ?? source.ends_at;
+      const newSeries: ActivitySeries = {
+        ...series, id: newId, title: changes.title ?? source.title, category: changes.category ?? source.category,
+        schedule_type: "fixed", anchor_starts_at: newStart, anchor_ends_at: newEnd,
+        expected_impact: changes.expected_impact ?? source.expected_impact, note: changes.note ?? source.note,
+        ends_on: changes.recurrence_end_date === undefined ? series.ends_on : changes.recurrence_end_date,
+        created_at: now, updated_at: now,
+      };
+      if (source.occurrence_index > 0) {
+        series.ends_on = cutoffBefore(series, source.occurrence_index);
+        series.updated_at = now;
+      }
+      data.activitySeries.push(newSeries);
+      data.activities = data.activities.map((item) => {
+        if (item.series_id !== series.id || item.occurrence_index < source.occurrence_index) return item;
+        const shifted = changesForOccurrence(item, source, changes);
+        return { ...item, ...shifted, schedule_type: "fixed", series_id: newId, recurrence: "weekly", recurrence_end_date: newSeries.ends_on, occurrence_index: item.occurrence_index - source.occurrence_index, updated_at: now };
+      });
+      data.activitySeriesExclusions = data.activitySeriesExclusions.map((item) => item.series_id === series.id && item.occurrence_index >= source.occurrence_index
+        ? { series_id: newId, occurrence_index: item.occurrence_index - source.occurrence_index }
+        : item);
+      if (source.occurrence_index === 0) data.activitySeries = data.activitySeries.filter((item) => item.id !== series.id);
+    } else {
+      if (scope === "all") {
+        const startDelta = changes.starts_at ? new Date(changes.starts_at).getTime() - new Date(source.starts_at).getTime() : 0;
+        const endDelta = changes.ends_at ? new Date(changes.ends_at).getTime() - new Date(source.ends_at).getTime() : 0;
+        series.title = changes.title ?? series.title;
+        series.category = changes.category ?? series.category;
+        series.anchor_starts_at = new Date(new Date(series.anchor_starts_at).getTime() + startDelta).toISOString();
+        series.anchor_ends_at = new Date(new Date(series.anchor_ends_at).getTime() + endDelta).toISOString();
+        series.expected_impact = changes.expected_impact ?? series.expected_impact;
+        series.note = changes.note ?? series.note;
+        if (changes.recurrence_end_date !== undefined) series.ends_on = changes.recurrence_end_date;
+        series.updated_at = now;
+      }
+      data.activities = data.activities.map((item) => selected(item, source, scope)
+        ? { ...item, ...changesForOccurrence(item, source, changes), recurrence: "weekly", recurrence_end_date: series.ends_on, updated_at: now }
+        : item);
+    }
+    const expiredIds = new Set(data.activities.filter((item) => {
+      if (!item.series_id) return false;
+      const itemSeries = data.activitySeries.find((value) => value.id === item.series_id);
+      const finalIndex = itemSeries ? finalOccurrenceIndex(itemSeries) : null;
+      return finalIndex !== null && item.occurrence_index > finalIndex;
+    }).map((item) => item.id));
+    data.activities = data.activities.filter((item) => !expiredIds.has(item.id));
+    data.activitySeriesExclusions = data.activitySeriesExclusions.filter((exclusion) => {
+      const exclusionSeries = data.activitySeries.find((item) => item.id === exclusion.series_id);
+      if (!exclusionSeries) return false;
+      const finalIndex = finalOccurrenceIndex(exclusionSeries);
+      return finalIndex === null || exclusion.occurrence_index <= finalIndex;
+    });
+    data.todos = data.todos.map((todo) => todo.activity_id && expiredIds.has(todo.activity_id) ? { ...todo, activity_id: null } : todo);
+    data.activities.forEach(validateActivityEnergy);
     save(data);
   }
 
   async deleteActivity(activity: Activity, scope: ActionScope): Promise<void> {
     const data = load();
-    const deletedIds = new Set(data.activities.filter((item) => selected(item, activity, scope)).map((item) => item.id));
-    data.activities = data.activities.filter((item) => !deletedIds.has(item.id));
-    data.todos = data.todos.map((todo) => todo.activity_id && deletedIds.has(todo.activity_id) ? { ...todo, activity_id: null } : todo);
+    deleteActivityFromData(data, activity.id, scope);
     save(data);
   }
 
@@ -558,13 +887,13 @@ export class DemoRepository implements EnergyRepository {
     return updated;
   }
 
-  async deleteLinkedTodo(todo: Todo, activity: Activity): Promise<void> {
+  async deleteLinkedTodo(todo: Todo, activity: Activity, scope: ActionScope): Promise<void> {
     const data = load();
     const hasTodo = data.todos.some((item) => item.id === todo.id && item.activity_id === activity.id);
     const hasActivity = data.activities.some((item) => item.id === activity.id);
     if (!hasTodo || !hasActivity) throw new Error("Không tìm thấy cặp Todo và hoạt động để xoá.");
     data.todos = data.todos.filter((item) => item.id !== todo.id);
-    data.activities = data.activities.filter((item) => item.id !== activity.id);
+    deleteActivityFromData(data, activity.id, scope);
     save(data);
   }
 

@@ -14,7 +14,7 @@
 - Tạo, tìm kiếm, lọc, sửa và xóa hoạt động.
 - Hai kiểu lịch: cố định và linh hoạt; nghỉ ngơi là một nhóm hoạt động.
 - Hoạt động có tác động dự kiến là mọi số nguyên từ -50 đến +50 năng lượng.
-- Lịch lặp hằng tuần được tạo trước 12 buổi.
+- Lịch lặp hằng tuần dành cho lịch cố định, có thể kết thúc theo ngày (inclusive) hoặc lặp vĩnh viễn; occurrence chỉ được tạo khi range lịch cần hiển thị.
 - Sửa/xóa riêng một buổi, từ buổi hiện tại trở đi hoặc toàn bộ chuỗi.
 - Đánh dấu nghỉ riêng một buổi mà không ảnh hưởng các tuần khác.
 - Cảnh báo nhẹ nhàng khi lịch trùng giờ hoặc năng lượng dự kiến dưới 30.
@@ -63,23 +63,24 @@ Dữ liệu demo:
 3. Sao chép toàn bộ nội dung `supabase/migrations/001_initial_schema.sql` vào SQL Editor và chạy một lần.
 4. Sau khi bước 3 hoàn tất, chạy `supabase/migrations/002_todos_reminders_calendar.sql`.
 5. Tiếp tục chạy `supabase/migrations/003_integer_energy_remove_recovery.sql` để chuẩn hoá kiểu lịch và miền năng lượng.
-6. Chạy `supabase/migrations/004_link_todos_to_activities.sql` để thêm liên kết Todo–Activity. Bốn migration bắt buộc chạy đúng thứ tự **001 → 002 → 003 → 004**. Migration 004 không tự gán Activity cho Todo cũ; Todo legacy đang pending chỉ được liên kết khi người dùng chỉnh sửa, còn Todo đã xong/đã huỷ cần khôi phục trước.
-7. Mở **Project Settings → API**.
-8. Lấy **Project URL** và **Publishable key**.
-9. Sao chép `.env.example` thành `.env.local`:
+6. Chạy `supabase/migrations/004_link_todos_to_activities.sql` để thêm liên kết Todo–Activity. Migration 004 không tự gán Activity cho Todo cũ; Todo legacy đang pending chỉ được liên kết khi người dùng chỉnh sửa, còn Todo đã xong/đã huỷ cần khôi phục trước.
+7. Chạy `supabase/migrations/005_activity_series_end.sql` để thêm series master, exclusions, ngày kết thúc và lazy materialization. Năm migration bắt buộc chạy đúng thứ tự **001 → 002 → 003 → 004 → 005**.
+8. Mở **Project Settings → API**.
+9. Lấy **Project URL** và **Publishable key**.
+10. Sao chép `.env.example` thành `.env.local`:
 
 ```powershell
 Copy-Item .env.example .env.local
 ```
 
-10. Điền hai giá trị:
+11. Điền hai giá trị:
 
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 ```
 
-11. Khởi động lại ứng dụng.
+12. Khởi động lại ứng dụng.
 
 Không đưa `service_role` key vào ứng dụng web, file `.env.local`, chat hoặc GitHub. `.env.local` đã được `.gitignore` loại trừ.
 
@@ -87,10 +88,14 @@ Không đưa `service_role` key vào ứng dụng web, file `.env.local`, chat h
 
 Dashboard vẫn tải check-in và lịch nếu phần schema Todo chưa có. Nếu bảng Todo/cột overdue/cột `activity_id` chưa tồn tại hoặc schema cache chưa cập nhật, màn hình Todo sẽ hướng dẫn chạy đủ **002 → 003 → 004** và có nút **Thử lại**. Với lỗi mạng, phiên đăng nhập hoặc RLS, ứng dụng giữ thông báo tương ứng thay vì quy thành lỗi migration. Sau khi chạy SQL trên Supabase, đợi schema API cập nhật rồi chọn **Thử lại**; không cần xoá dữ liệu.
 
+### Khi lịch lặp báo chưa sẵn sàng
+
+Nếu database chưa có `activity_series`, exclusions hoặc relation tương ứng, dashboard dừng tải lịch và hướng dẫn chạy `supabase/migrations/005_activity_series_end.sql`. Đây là lỗi schema bắt buộc, không có fallback tạo trước hữu hạn occurrence. Sau khi chạy migration 005, đợi schema API cập nhật rồi chọn **Thử lại**.
+
 ### Giới hạn Todo, lịch và nhắc việc
 
 - Todo và lịch là dữ liệu nội bộ của ứng dụng; chưa đồng bộ Google Calendar hoặc dịch vụ lịch bên ngoài.
-- Lịch lặp chỉ tạo trước 12 buổi, chưa phải recurrence vô hạn.
+- Lịch lặp không tạo vô hạn row: repository chỉ materialize occurrence giao với range Today/Week/Month hoặc reminder đang yêu cầu.
 - Nhắc việc chạy phía trình duyệt và chỉ hoạt động khi website cùng trình duyệt vẫn mở; chưa có background push, service worker hay ứng dụng native. Quyền notification vẫn phụ thuộc cài đặt của trình duyệt/hệ điều hành.
 - Chế độ demo lưu Todo/lịch cục bộ nên không đồng bộ giữa tab, thiết bị hoặc tài khoản.
 

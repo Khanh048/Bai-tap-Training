@@ -6,6 +6,13 @@ export function clampEnergy(value: number): number {
   return Math.min(100, Math.max(0, Math.round(value)));
 }
 
+export type EnergyBand = "low" | "medium" | "high";
+
+export function energyBand(value: number): EnergyBand {
+  const energy = clampEnergy(value);
+  return energy < 30 ? "low" : energy < 60 ? "medium" : "high";
+}
+
 export function compareActivitiesByImpactTime(
   left: Pick<Activity, "ends_at" | "starts_at" | "id">,
   right: Pick<Activity, "ends_at" | "starts_at" | "id">,
